@@ -153,21 +153,44 @@
 {
     [super touchesBegan:touches withEvent:event];
     
-    [self _updateModelWithTouches:touches endContinuousLine:YES];
+    [self _updateModelWithTouches:touches event:event endContinuousLine:YES];
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
     [super touchesMoved:touches withEvent:event];
     
-    [self _updateModelWithTouches:touches endContinuousLine:NO];
+    [self _updateModelWithTouches:touches event:event endContinuousLine:NO];
 }
 
 #pragma mark - Private
 
-- (void)_updateModelWithTouches:(NSSet<UITouch *> *)touches endContinuousLine:(BOOL)endContinuousLine
+- (void)_updateModelWithTouches:(NSSet<UITouch *> *)touches event:(UIEvent *)event endContinuousLine:(BOOL)endContinuousLine
 {
-    CGPoint touchPoint = [self.class _touchPointFromTouches:touches];
+    NSMutableSet<UITouch *> *const coalescedTouches = [NSMutableSet new];
+    for (UITouch *touch in touches) {
+        // Get high fidelity (i.e. paired Apple stylus) touches on devices that support it.
+        // https://apple.co/2E32vNk
+        [coalescedTouches addObjectsFromArray:[event coalescedTouchesForTouch:touch]];
+    }
+    if (coalescedTouches.count > 0) {
+        static NSArray<NSSortDescriptor *> *descriptors = nil;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            descriptors = @[[NSSortDescriptor sortDescriptorWithKey:NSStringFromSelector(@selector(timestamp)) ascending:YES]];
+        });
+        NSArray<UITouch *> *const sortedCoalescedTouches = [coalescedTouches sortedArrayUsingDescriptors:descriptors];
+        [sortedCoalescedTouches enumerateObjectsUsingBlock:^(UITouch * _Nonnull touch, NSUInteger idx, BOOL * _Nonnull stop) {
+            [self _updateModelWithTouch:touch usePreciseLocation:YES endContinuousLine:endContinuousLine && idx == sortedCoalescedTouches.count - 1];
+        }];
+    } else {
+        [self _updateModelWithTouch:[touches anyObject] usePreciseLocation:NO endContinuousLine:endContinuousLine];
+    }
+}
+
+- (void)_updateModelWithTouch:(UITouch *)touch usePreciseLocation:(BOOL)usePreciseLocation endContinuousLine:(BOOL)endContinuousLine
+{
+    CGPoint touchPoint = [self.class _touchPointFromTouch:touch usePreciseLocation:usePreciseLocation];
     
     if (endContinuousLine) {
         [self.model asyncEndContinuousLine];
@@ -193,11 +216,18 @@
 
 #pragma mark - Helpers
 
-+ (CGPoint)_touchPointFromTouches:(NSSet<UITouch *> *)touches
++ (CGPoint)_touchPointFromTouch:(UITouch *)touch usePreciseLocation:(BOOL)usePreciseLocation
 {
-    UITouch *touch = [touches anyObject];
+    CGPoint point;
+    if (usePreciseLocation) {
+        // Use precise location for touches captured with paired Apple styluses.
+        // https://apple.co/2GzmDrX
+        point = [touch preciseLocationInView:touch.view];
+    } else {
+        point = [touch locationInView:touch.view];
+    }
     
-    return [touch locationInView:touch.view];
+    return point;
 }
 
 @end
